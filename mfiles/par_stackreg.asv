@@ -1,0 +1,92 @@
+function stack_reg = par_stackreg(data,reg_para)
+%STACKREG Summary of this function goes here
+%   Detailed explanation goes here
+%
+%   Nicolas Liaudet
+%   Bioimaging Core Facility - UNIGE
+%   https://www.unige.ch/medecine/bioimaging/en/bioimaging-core-facility/
+% 
+%   v1.0 29-Apr-2019 NL
+
+
+transformType = reg_para.transformType;
+optimizer     = reg_para.optimizer;
+metric        = reg_para.metric;
+sigmablur     = reg_para.sigmablur;
+idxTREF       = reg_para.idxTREF;
+idxCREF       = reg_para.idxCREF;
+
+% Default spatial referencing objects
+fixedRefObj  = imref2d([data.DimY data.DimX]);
+movingRefObj = imref2d([data.DimY data.DimX]);
+% Align centers
+fixedCenterXWorld = mean(fixedRefObj.XWorldLimits);
+fixedCenterYWorld = mean(fixedRefObj.YWorldLimits);
+movingCenterXWorld = mean(movingRefObj.XWorldLimits);
+movingCenterYWorld = mean(movingRefObj.YWorldLimits);
+translationX = fixedCenterXWorld - movingCenterXWorld;
+translationY = fixedCenterYWorld - movingCenterYWorld;
+
+% Coarse alignment
+initTform = affine2d();
+initTform.T(3,1:2) = [translationX, translationY];
+
+
+stack_reg = data.OriginalStack;
+FIXED = data.OriginalStack(:,:,idxTREF,idxCREF);
+idxTMOVING = [1:data.DimT];
+% idxTMOVING(idxTMOVING==idxTREF) = [];
+
+
+% Apply Gaussian blur & Normalize image
+fixedInit = imgaussfilt(FIXED,sigmablur);
+fixedInit  = mat2gray(fixedInit);
+DimC = data.DimC;
+WaitMessage = parfor_wait(length(idxTMOVING), 'Waitbar', true);
+
+parfor idxT = idxTMOVING
+    WaitMessage.Send;
+    
+    MOVING = data.OriginalStack(:,:,idxT,idxCREF);
+    % Apply Gaussian blur & Normalize image
+    movingInit = imgaussfilt(MOVING,sigmablur);
+    movingInit = mat2gray(movingInit);
+    
+    
+    % Apply transformation
+    tform = imregtform(movingInit,movingRefObj,...
+        fixedInit,fixedRefObj,....
+        transformType,...
+        optimizer,metric,...
+        'PyramidLevels',3 );
+%     MOVINGREG.Transformation = tform;
+
+    for idxC = 1:DimC        
+        MOVING = data.OriginalStack(:,:,idxT,idxC);
+        RegisteredImage = imwarp(MOVING, movingRefObj,...
+            tform,...
+            'cubic',...
+            'OutputView', fixedRefObj,...
+            'SmoothEdges', true);
+        stack_reg(:,:,idxT,idxC) = RegisteredImage;
+    end
+    MOVING = data.BWadhesion(:,:,idxT);
+    RegisteredImage = imwarp(MOVING, movingRefObj,...
+        tform,...
+        'nearest',...
+        'OutputView', fixedRefObj,...
+        'SmoothEdges', true);
+    BWadhesion(:,:,idxT) = RegisteredImage;
+
+%      RegisteredImage = imwarp(stack_reg(:,:,idxT), movingRefObj,...
+%         tform,...
+%         'cubic',...
+%         'OutputView', fixedRefObj,...
+%         'SmoothEdges', true);
+
+    
+
+end
+WaitMessage.Destroy
+end
+
